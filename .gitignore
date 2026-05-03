@@ -8,4 +8,5 @@ airflow/logs/
 data/raw/
 data/processed/
 data/checkpoints/
+data/spark-ivy/
 ml/models/
