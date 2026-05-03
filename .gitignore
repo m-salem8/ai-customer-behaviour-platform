@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+*.log
+airflow/logs/
+data/raw/
+data/processed/
+data/checkpoints/
+ml/models/
