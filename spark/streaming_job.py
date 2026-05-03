@@ -1,6 +1,16 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+
+from config import RAW_CHECKPOINT, WINDOW_CHECKPOINT
+from readers import read_kafka_stream
+from transformations import (
+    parse_raw_events,
+    parse_events_with_timestamp,
+    build_event_type_window_metrics,
+)
+from sinks import (
+    write_raw_events_to_postgres,
+    write_window_metrics_to_postgres,
+)
 
 spark = SparkSession.builder \
     .appName("CustomerEventsStreaming") \
@@ -8,43 +18,26 @@ spark = SparkSession.builder \
 
 spark.sparkContext.setLogLevel("WARN")
 
-schema = StructType([
-    StructField("user_id", StringType(), True),
-    StructField("event_type", StringType(), True),
-    StructField("product_id", StringType(), True),
-    StructField("timestamp", DoubleType(), True),
-])
+raw_df = read_kafka_stream(spark)
 
-raw_df = spark.readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "kafka:9092") \
-    .option("subscribe", "customer_events") \
-    .option("startingOffsets", "earliest") \
-    .load()
+raw_events_df = parse_raw_events(raw_df)
 
-events_df = raw_df.selectExpr("CAST(value AS STRING) as json_value") \
-    .select(from_json(col("json_value"), schema).alias("data")) \
-    .select(
-        col("data.user_id"),
-        col("data.event_type"),
-        col("data.product_id"),
-        col("data.timestamp").alias("event_time")
-    )
+events_with_timestamp_df = parse_events_with_timestamp(raw_df)
 
-def write_to_postgres(batch_df, batch_id):
-    batch_df.write \
-        .format("jdbc") \
-        .option("url", "jdbc:postgresql://postgres:5432/customer_db") \
-        .option("dbtable", "customer_events") \
-        .option("user", "user") \
-        .option("password", "password") \
-        .option("driver", "org.postgresql.Driver") \
-        .mode("append") \
-        .save()
+window_metrics_df = build_event_type_window_metrics(events_with_timestamp_df)
 
-query = events_df.writeStream \
-    .foreachBatch(write_to_postgres) \
+raw_query = raw_events_df.writeStream \
+    .foreachBatch(write_raw_events_to_postgres) \
     .outputMode("append") \
+    .option("checkpointLocation", RAW_CHECKPOINT) \
     .start()
 
-query.awaitTermination()
+metrics_query = window_metrics_df.writeStream \
+    .foreachBatch(write_window_metrics_to_postgres) \
+    .outputMode("update") \
+    .option("checkpointLocation", WINDOW_CHECKPOINT) \
+    .trigger(processingTime="10 seconds") \
+    .start()
+
+raw_query.awaitTermination()
+metrics_query.awaitTermination()

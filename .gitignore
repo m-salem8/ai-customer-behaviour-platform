@@ -10,3 +10,12 @@ data/processed/
 data/checkpoints/
 data/spark-ivy/
 ml/models/
+spark/checkpoints/
+data/
+spark/logs/
+spark/__pycache__/
+*.crc
+dashboars/__pycache__/
+dashboards/logs/
+dashboards/reports/
+dashboards/__pycache__/
