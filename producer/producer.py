@@ -33,11 +33,11 @@ while True:
 # Start producing
 while True:
     event = {
-        "user_id": random.randint(1, 10),
-        "event_type": random.choice(event_types),
-        "product_id": random.randint(1, 50),
-        "timestamp": time.time()
-    }
+    "user_id": f"user_{random.randint(1, 10)}",
+    "event_type": random.choice(event_types),
+    "product_id": f"product_{random.randint(1, 50)}",
+    "timestamp": time.time()
+}
 
     producer.produce(
         topic="customer_events",
