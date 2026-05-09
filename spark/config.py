@@ -19,5 +19,5 @@ RAW_EVENTS_TABLE = "customer_events"               # Stores every raw event
 WINDOW_METRICS_TABLE = "event_type_window_metrics"  # Stores aggregated window counts
 
 # Checkpoint directories – used by Spark Structured Streaming for fault-tolerance
-RAW_CHECKPOINT = "/app/checkpoints/raw_events"         # Checkpoint for raw events stream
-WINDOW_CHECKPOINT = "/app/checkpoints/window_metrics"  # Checkpoint for windowed aggregation stream
+RAW_CHECKPOINT = "/tmp/spark-checkpoints/raw_events"         # Checkpoint for raw events stream
+WINDOW_CHECKPOINT = "/tmp/spark-checkpoints/window_metrics"  # Checkpoint for windowed aggregation stream
