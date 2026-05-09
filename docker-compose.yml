@@ -54,6 +54,7 @@ services:
     volumes:
       - ./spark:/app
       - ./data/spark-ivy:/tmp/.ivy2
+      - ./data:/data
       - spark_checkpoints:/tmp/spark-checkpoints
       
     environment:

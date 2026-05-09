@@ -1,18 +1,38 @@
 # =============================================================================
-# Main entry-point for the Spark Structured Streaming job.
+# Main entry-point for the Spark Structured Streaming pipeline.
 #
-# This script is launched when the Spark container starts.  It:
+# This script is launched when the Spark container starts. It:
+#
 #   1. Reads a continuous stream of customer events from Kafka.
-#   2. Parses the raw JSON into structured columns.
+#   2. Parses raw JSON events into structured Spark DataFrames.
 #   3. Computes tumbling-window aggregations (5 min) grouped by event type.
-#   4. Writes both raw events and window metrics to PostgreSQL via foreachBatch.
+#   4. Writes streaming data into a Lakehouse-style architecture:
 #
-# The two streaming queries run concurrently and indefinitely.
+#        Bronze Layer → raw Kafka JSON events stored as Parquet
+#        Silver Layer → cleaned structured events stored as Parquet
+#
+#   5. Persists serving-layer tables into PostgreSQL for dashboard analytics:
+#
+#        customer_events
+#        event_type_window_metrics
+#
+# Note:
+#   Gold metrics are currently persisted to PostgreSQL only.
+#   Gold Parquet output is intentionally disabled for now because Parquet does
+#   not support Spark Streaming "update" output mode directly for aggregations.
+#
+# The streaming queries run concurrently and continuously using Spark
+# Structured Streaming with checkpointing for fault tolerance and recovery.
 # =============================================================================
 
 from pyspark.sql import SparkSession
 
-from config import RAW_CHECKPOINT, WINDOW_CHECKPOINT
+from config import (
+    RAW_CHECKPOINT,
+    WINDOW_CHECKPOINT,
+    BRONZE_CHECKPOINT,
+    SILVER_CHECKPOINT,
+)
 from readers import read_kafka_stream
 from transformations import (
     parse_raw_events,
@@ -22,6 +42,8 @@ from transformations import (
 from sinks import (
     write_raw_events_to_postgres,
     write_window_metrics_to_postgres,
+    write_bronze_to_parquet,
+    write_silver_to_parquet,
 )
 
 # ---------------------------------------------------------------------------
@@ -31,7 +53,7 @@ spark = SparkSession.builder \
     .appName("CustomerEventsStreaming") \
     .getOrCreate()
 
-spark.sparkContext.setLogLevel("WARN")          # reduce noise in logs
+spark.sparkContext.setLogLevel("WARN")
 
 # ---------------------------------------------------------------------------
 # 2. Read streaming data from Kafka
@@ -39,11 +61,16 @@ spark.sparkContext.setLogLevel("WARN")          # reduce noise in logs
 raw_df = read_kafka_stream(spark)
 
 # ---------------------------------------------------------------------------
-# 3. Parse events (two variants for different downstream uses)
+# 3. Parse events
 # ---------------------------------------------------------------------------
-raw_events_df = parse_raw_events(raw_df)            # keep numeric timestamp
 
-events_with_timestamp_df = parse_events_with_timestamp(raw_df)  # proper timestamp for windows
+# Silver-ready event format with numeric timestamp.
+# This is used for PostgreSQL raw event storage and Silver Parquet output.
+raw_events_df = parse_raw_events(raw_df)
+
+# Timestamp-cast event format.
+# This is required for Spark window aggregations.
+events_with_timestamp_df = parse_events_with_timestamp(raw_df)
 
 # ---------------------------------------------------------------------------
 # 4. Build windowed aggregations
@@ -51,19 +78,17 @@ events_with_timestamp_df = parse_events_with_timestamp(raw_df)  # proper timesta
 window_metrics_df = build_event_type_window_metrics(events_with_timestamp_df)
 
 # ---------------------------------------------------------------------------
-# 5. Define the two streaming queries
+# 5. Define streaming queries
 # ---------------------------------------------------------------------------
 
-# Query 1: persist every raw event to PostgreSQL
+# Query 1: Persist cleaned raw events to PostgreSQL.
 raw_query = raw_events_df.writeStream \
     .foreachBatch(write_raw_events_to_postgres) \
     .outputMode("append") \
     .option("checkpointLocation", RAW_CHECKPOINT) \
     .start()
 
-# Query 2: persist windowed aggregation results to PostgreSQL
-#   outputMode = "update"  → only emit rows that changed (new windows)
-#   trigger    = 10 sec    → micro-batch interval (check for new data every 10 s)
+# Query 2: Persist windowed Gold metrics to PostgreSQL.
 metrics_query = window_metrics_df.writeStream \
     .foreachBatch(write_window_metrics_to_postgres) \
     .outputMode("update") \
@@ -71,8 +96,21 @@ metrics_query = window_metrics_df.writeStream \
     .trigger(processingTime="10 seconds") \
     .start()
 
+# Query 3: Bronze layer - raw Kafka JSON as Parquet.
+bronze_query = write_bronze_to_parquet(
+    raw_df.selectExpr("CAST(value AS STRING) AS raw_value")
+) \
+    .outputMode("append") \
+    .option("checkpointLocation", BRONZE_CHECKPOINT) \
+    .start()
+
+# Query 4: Silver layer - cleaned structured events as Parquet.
+silver_query = write_silver_to_parquet(raw_events_df) \
+    .outputMode("append") \
+    .option("checkpointLocation", SILVER_CHECKPOINT) \
+    .start()
+
 # ---------------------------------------------------------------------------
 # 6. Keep the application running
 # ---------------------------------------------------------------------------
-raw_query.awaitTermination()
-metrics_query.awaitTermination()
+spark.streams.awaitAnyTermination()

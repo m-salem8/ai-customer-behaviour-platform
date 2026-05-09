@@ -1,9 +1,19 @@
 # =============================================================================
 # Transformation module.
 #
-# Contains all the logic for parsing raw Kafka JSON payloads and building
-# derived aggregations (windowed metrics).  Keeping transformations separate
-# makes them testable and reusable across both streaming and batch contexts.
+# This module contains all Spark transformation logic:
+#
+#   Bronze preparation:
+#       Kafka binary value → raw JSON string
+#
+#   Silver preparation:
+#       Raw JSON string → parsed, typed, structured event columns
+#
+#   Gold preparation:
+#       Structured events → 5-minute windowed business metrics
+#
+# Keeping transformations in one module makes the code easier to test,
+# reuse, and maintain.
 # =============================================================================
 
 from pyspark.sql.functions import col, from_json, from_unixtime, window
@@ -12,47 +22,71 @@ from schemas import customer_event_schema
 
 def parse_raw_events(raw_df):
     """
-    Parse the raw Kafka 'value' binary column into a structured DataFrame
-    with meaningful column names.
+    Build the Silver event DataFrame.
 
-    The resulting DataFrame keeps the original `timestamp` as a numeric field
-    (double) and renames it to `event_time`.
+    This function parses Kafka JSON messages into structured columns using
+    the expected customer event schema.
 
-    Parameters
-    ----------
-    raw_df : DataFrame
-        Streaming DataFrame from Kafka reader (contains a 'value' binary column).
+    Input:
+        raw_df:
+            Kafka streaming DataFrame.
+            The Kafka 'value' column is binary.
 
-    Returns
-    -------
-    DataFrame with columns: user_id, event_type, product_id, event_time
+    Transformation:
+        1. Cast Kafka value from binary to string.
+        2. Parse JSON using customer_event_schema.
+        3. Extract business columns.
+        4. Rename timestamp to event_time.
+
+    Output columns:
+        user_id      STRING
+        event_type   STRING
+        product_id   STRING
+        event_time   DOUBLE
+
+    Note:
+        event_time remains a numeric epoch timestamp here because this version
+        is used for PostgreSQL storage and dashboard filtering.
     """
-    return raw_df.selectExpr("CAST(value AS STRING) as json_value") \
+
+    return raw_df.selectExpr("CAST(value AS STRING) AS json_value") \
         .select(from_json(col("json_value"), customer_event_schema).alias("data")) \
         .select(
             col("data.user_id"),
             col("data.event_type"),
             col("data.product_id"),
-            col("data.timestamp").alias("event_time")      # keep as raw double (epoch)
+            col("data.timestamp").alias("event_time")
         )
 
 
 def parse_events_with_timestamp(raw_df):
     """
-    Similar to parse_raw_events, but converts the numeric timestamp into a
-    proper Spark timestamp type.  This is required for watermark-based window
-    aggregations (tumbling/sliding windows).
+    Build the timestamp-based event DataFrame.
 
-    Parameters
-    ----------
-    raw_df : DataFrame
-        Streaming DataFrame from Kafka reader.
+    This function is similar to parse_raw_events(), but converts the numeric
+    epoch timestamp into a Spark timestamp type.
 
-    Returns
-    -------
-    DataFrame with columns: user_id, event_type, product_id, event_time_ts
+    Why?
+        Spark window aggregations and watermarks require a timestamp column.
+
+    Input:
+        raw_df:
+            Kafka streaming DataFrame.
+
+    Transformation:
+        1. Cast Kafka value from binary to string.
+        2. Parse JSON using customer_event_schema.
+        3. Extract event fields.
+        4. Convert numeric epoch timestamp to Spark timestamp.
+
+    Output columns:
+        user_id          STRING
+        event_type       STRING
+        product_id       STRING
+        event_time_ts    TIMESTAMP
     """
-    return raw_df.selectExpr("CAST(value AS STRING) as json_value") \
+
+    return raw_df.selectExpr("CAST(value AS STRING) AS json_value") \
         .select(from_json(col("json_value"), customer_event_schema).alias("data")) \
         .select(
             col("data.user_id"),
@@ -64,27 +98,38 @@ def parse_events_with_timestamp(raw_df):
 
 def build_event_type_window_metrics(events_df):
     """
-    Aggregate events by 5-minute tumbling windows, grouped by event_type.
+    Build the Gold windowed metrics DataFrame.
 
-    Uses a 1-minute watermark to handle late-arriving data (events delayed
-    by up to 60 seconds are still included in the correct window).
+    This function aggregates events into 5-minute tumbling windows grouped
+    by event_type.
 
-    The output table has one row per (window_start, window_end, event_type)
-    with a count of how many events of that type occurred in the window.
+    Input:
+        events_df:
+            DataFrame with:
+                event_time_ts TIMESTAMP
+                event_type STRING
 
-    Parameters
-    ----------
-    events_df : DataFrame
-        DataFrame with event_time_ts (timestamp) and event_type columns.
+    Transformation:
+        1. Apply a 1-minute watermark for late-arriving events.
+        2. Group records into 5-minute tumbling windows.
+        3. Count events per event_type per window.
+        4. Flatten the Spark window struct into window_start and window_end.
 
-    Returns
-    -------
-    DataFrame with columns: window_start, window_end, event_type, event_count
+    Output columns:
+        window_start    TIMESTAMP
+        window_end      TIMESTAMP
+        event_type      STRING
+        event_count     LONG
+
+    Example output:
+        10:00 | 10:05 | product_view | 120
+        10:00 | 10:05 | purchase     | 25
     """
+
     return events_df \
         .withWatermark("event_time_ts", "1 minute") \
         .groupBy(
-            window(col("event_time_ts"), "5 minutes"),   # tumbling window every 5 min
+            window(col("event_time_ts"), "5 minutes"),
             col("event_type")
         ) \
         .count() \

@@ -19,3 +19,8 @@ dashboars/__pycache__/
 dashboards/logs/
 dashboards/reports/
 dashboards/__pycache__/
+data/
+spark/checkpoints/
+*.crc
+__pycache__/
+*.pyc
