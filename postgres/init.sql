@@ -11,3 +11,9 @@ CREATE TABLE IF NOT EXISTS event_type_window_metrics (
     event_type TEXT,
     event_count BIGINT
 );
+
+CREATE TABLE IF NOT EXISTS rejected_events(
+    raw_value TEXT,
+    error_reason TEXT,
+    rejected_at TIMESTAMP
+);

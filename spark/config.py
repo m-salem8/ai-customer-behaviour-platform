@@ -29,3 +29,7 @@ GOLD_PATH = "/data/gold/event_type_window_metrics"
 BRONZE_CHECKPOINT = "/tmp/spark-checkpoints/bronze"
 SILVER_CHECKPOINT = "/tmp/spark-checkpoints/silver"
 GOLD_CHECKPOINT = "/tmp/spark-checkpoints/gold"
+
+VALID_EVENT_TYPES = ["product_view", "add_to_cart", "purchase"]  # Valid event types for filtering    
+REJECTED_EVENTS_TABLE = "rejected_events"  # Table to store rejected events for auditing    
+REJECTED_CHECKPOINT = "/tmp/spark-checkpoints/rejected_events"  # Checkpoint for rejected events stream

@@ -26,6 +26,11 @@
 # =============================================================================
 
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, current_timestamp
+from config import REJECTED_CHECKPOINT
+from transformations import build_rejected_events
+from sinks import write_rejected_events_to_postgres
+
 
 from config import (
     RAW_CHECKPOINT,
@@ -76,7 +81,12 @@ events_with_timestamp_df = parse_events_with_timestamp(raw_df)
 # 4. Build windowed aggregations
 # ---------------------------------------------------------------------------
 window_metrics_df = build_event_type_window_metrics(events_with_timestamp_df)
-
+rejected_events_df = build_rejected_events(raw_df)
+rejected_Query = rejected_events_df.writeStream \
+    .foreachBatch(write_rejected_events_to_postgres) \
+    .outputMode("append") \
+    .option("checkpointLocation", REJECTED_CHECKPOINT) \
+    .start()
 # ---------------------------------------------------------------------------
 # 5. Define streaming queries
 # ---------------------------------------------------------------------------
@@ -97,9 +107,16 @@ metrics_query = window_metrics_df.writeStream \
     .start()
 
 # Query 3: Bronze layer - raw Kafka JSON as Parquet.
-bronze_query = write_bronze_to_parquet(
-    raw_df.selectExpr("CAST(value AS STRING) AS raw_value")
-) \
+bronze_df = raw_df.select(
+    col("topic").alias("kafka_topic"),
+    col("partition").alias("kafka_partition"),
+    col("offset").alias("kafka_offset"),
+    col("timestamp").alias("kafka_timestamp"),
+    current_timestamp().alias("ingestion_time"),
+    col("value").cast("string").alias("raw_value")
+)
+
+bronze_query = write_bronze_to_parquet(bronze_df) \
     .outputMode("append") \
     .option("checkpointLocation", BRONZE_CHECKPOINT) \
     .start()

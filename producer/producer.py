@@ -33,9 +33,14 @@ while True:
 # Start producing
 while True:
     event = {
-    "user_id": f"user_{random.randint(1, 10)}",
-    "event_type": random.choice(event_types),
-    "product_id": f"product_{random.randint(1, 50)}",
+    "user_id": f"user_{random.randint(1,10)}",
+    "event_type": random.choice([
+        "product_view",
+        "add_to_cart",
+        "purchase",
+        "invalid_event"      # intentionally bad
+    ]),
+    "product_id": f"product_{random.randint(1,50)}",
     "timestamp": time.time()
 }
 

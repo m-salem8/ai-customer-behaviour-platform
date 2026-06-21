@@ -17,6 +17,8 @@
 # =============================================================================
 
 from pyspark.sql.functions import col, from_json, from_unixtime, window
+from pyspark.sql.functions import current_timestamp, lit, when
+from config import VALID_EVENT_TYPES
 from schemas import customer_event_schema
 
 
@@ -138,4 +140,26 @@ def build_event_type_window_metrics(events_df):
             col("window.end").alias("window_end"),
             col("event_type"),
             col("count").alias("event_count")
+        )
+
+def build_rejected_events(raw_df):
+    parsed_df = raw_df.selectExpr("CAST(value AS STRING) AS raw_value") \
+        .select(
+            col("raw_value"),
+            from_json(col("raw_value"), customer_event_schema).alias("data")
+        )
+
+    return parsed_df \
+        .withColumn(
+            "error_reason",
+            when(col("data.user_id").isNull(), lit("missing_user_id"))
+            .when(col("data.product_id").isNull(), lit("missing_product_id"))
+            .when(col("data.timestamp").isNull(), lit("missing_timestamp"))
+            .when(~col("data.event_type").isin(VALID_EVENT_TYPES), lit("invalid_event_type"))
+        ) \
+        .filter(col("error_reason").isNotNull()) \
+        .select(
+            col("raw_value"),
+            col("error_reason"),
+            current_timestamp().alias("rejected_at")
         )

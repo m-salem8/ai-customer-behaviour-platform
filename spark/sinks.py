@@ -28,6 +28,7 @@ from config import (
     WINDOW_METRICS_TABLE,
     BRONZE_PATH,
     SILVER_PATH,
+    REJECTED_EVENTS_TABLE,
 )
 
 
@@ -103,6 +104,32 @@ def write_window_metrics_to_postgres(batch_df, batch_id):
         .format("jdbc") \
         .option("url", POSTGRES_URL) \
         .option("dbtable", WINDOW_METRICS_TABLE) \
+        .option("user", POSTGRES_USER) \
+        .option("password", POSTGRES_PASSWORD) \
+        .option("driver", POSTGRES_DRIVER) \
+        .mode("append") \
+        .save()
+
+def write_rejected_events_to_postgres(batch_df, batch_id):
+    """
+    Write rejected events to PostgreSQL for auditing.
+
+    This function is used with Spark Structured Streaming foreachBatch.
+
+    Target table:
+        rejected_events
+
+    Write mode:
+        append
+
+    Why append?
+        We want to keep a historical record of all rejected events for auditing.
+    """
+
+    batch_df.write \
+        .format("jdbc") \
+        .option("url", POSTGRES_URL) \
+        .option("dbtable", REJECTED_EVENTS_TABLE) \
         .option("user", POSTGRES_USER) \
         .option("password", POSTGRES_PASSWORD) \
         .option("driver", POSTGRES_DRIVER) \
